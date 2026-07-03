@@ -1,0 +1,494 @@
+---
+title: "Environmental Statistics"
+subtitle: 'Lecture 8: Time Series, GAM, and Spatial Regression: VCOV and GLS (incl. AR1)'
+author:
+- "Ikedichi Edward Azuh"
+- "Carsten Dormann"
+
+output:
+  pdf_document: 
+    latex_engine: xelatex
+  html_document: default
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+# 1. Overview
+Suppose we measure daily river discharge for five years. Yesterday's discharge strongly influences today's discharge. Similarly, annual tree-ring growth depends on the previous year's climate. These observations are therefore not independent, violating one of the key assumptions of ordinary regression and can lead to biased inference. 
+
+This lecture distinguishes between misspecification of the mean structure (handled by GAM) and misspecification of the covariance structure (handled by GLS).
+
+In this lecture we cover:
+
+-   Autocorrelation in time and space
+-   Diagnostics: ACF, PACF, correlogram, variogram
+-   Generalized Additive Models (GAMs) for non-linear trends
+-   Generalized Least Squares (GLS) with AR(1) correlation structure
+-   Consequences for inference and model interpretation
+
+# 2. Autocorrelation in Environmental Data
+
+## 2.1 What is autocorrelation?
+
+Autocorrelation occurs when observations closer in time or space are more similar than expected from predictors alone.
+
+This violates the assumption of independent residuals in regression models.
+
+**Key idea:**
+
+If residuals are autocorrelated, the model is missing structure. Autocorrelation implies that the variance–covariance matrix of the errors is no longer diagonal.
+
+### 2.1.1 Autocorrelated time series
+
+```{r}
+set.seed(42)
+
+n <- 200
+time <- 1:n
+
+# AR(1) process
+y_ar1 <- arima.sim(model = list(ar = 0.8), n = n)
+
+plot(time, y_ar1, type = "l",
+     main = "Simulated AR(1) Process (Temporal Autocorrelation)",
+     xlab = "Time", ylab = "Value")
+```
+
+This is an example of a first-order dependence structure where current values depend on the previous observation.
+
+### 2.1.2 Non-linear trend (why GAM is needed)
+
+```{r}
+y_nonlinear <- sin(time/10) + rnorm(n, 0, 0.3)
+
+plot(time, y_nonlinear, type = "l",
+     main = "Non-linear Environmental Signal",
+     xlab = "Time", ylab = "Value")
+```
+
+
+## 2.2 Causes of autocorrelation
+
+**(i) Statistical causes**
+
+-   Missing predictors
+-   Incorrect functional form (wrong f(x))
+-   Unmodelled trends or seasonality
+
+**(ii) Ecological / physical causes**
+
+-   Dispersal processes (spatial dependence)
+-   Carry-over effects (temporal dependence)
+-   Hydrological connectivity, climate memory
+
+
+# 3. Detecting Autocorrelation
+## 3.1 Time series tools
+
+-   ACF (Autocorrelation Function): correlation vs lag
+-   PACF (Partial Autocorrelation Function): direct lag effects
+-   Correlogram: visual summary
+
+```{r}
+# Example 1 : Nile (Annual river flow)
+
+data(Nile)
+ 
+plot(Nile,
+     main="Annual Flow of the River Nile",
+     ylab="Flow (10^8 m³)",
+     xlab="Year")
+
+
+# Example 2 : LakeHuron data
+data(LakeHuron)
+
+plot(LakeHuron,
+     main="Lake Huron Water Levels",
+     ylab="level (feet)",
+     xlab="Year")
+
+
+```
+
+
+**Fit a linear model**
+```{r, fig.height=10, fig.width=11}
+# ACF plot
+
+time <- time(Nile)
+
+lm <- lm(Nile ~ time)
+
+summary(lm)
+```
+
+
+**lm residual diagnostics**
+
+```{r, fig.height=10, fig.width=11}
+
+par(mfrow=c(2,2))
+
+# Residual plot
+plot(time,
+     residuals(lm),
+     type="l",
+     xlab="Year",
+     ylab="Residual",
+     main="Residuals from Linear Regression")
+
+# ACF plot
+acf(residuals(lm),
+    main="Residual ACF")
+
+
+# PACF plot
+pacf(residuals(lm),
+    main="Residual PACF")
+
+par(mfrow=c(1,1))
+
+```
+
+The ACF shows significant autocorrelation at lags 2 and 3, whereas the PACF suggests that much of this dependence may be explained by lower-order lag effects, consistent with a low-order autoregressive process.
+
+## 3.2 Spatial tools
+
+- **Variogram**: measures spatial dissimilarity (semivariance) as a function of distance.
+- **Spatial correlogram**: measures spatial correlation as a function of distance (i.e correlation vs spatial lag).
+
+The variogram is defined as
+
+$$
+\gamma(h)=\frac{1}{2}Var\{Z(s)-Z(s+h)\},
+$$
+where
+
+-  \(Z(s)\) is the value of the variable of interest at spatial location \(s\),
+-  \(Z(s+h)\) is the value of the same variable at another location separated from \(s\) by a distance (or lag) \(h\),
+-  \(h\) is the spatial lag (separation distance) between the two locations.
+
+Thus, the variogram measures half the variance of the difference between observations at locations separated by a distance \(h\). As the distance between locations increases, observations typically become less similar, causing the semivariance to increase.
+
+The classic variogram models are:
+
+- **Spherical:** semivariance increases with distance and then levels off at the sill.
+- **Exponential:** semivariance increases rapidly at short distances before approaching the sill asymptotically.
+- **Gaussian:** semivariance increases smoothly near the origin, indicating very strong short-range spatial continuity.
+
+**Key distinction**:
+
+-  Geostatistics → continuous spatial fields (kriging, variograms)
+-  Spatial regression → explicit model-based dependence structure
+
+**Spatial data (example): Meuse river dataset**
+
+This data set gives locations and topsoil heavy metal concentrations, along with a number of soil and landscape variables at the observation locations, collected in a flood plain of the river Meuse, near the village of Stein (NL). Heavy metal concentrations are from composite samples of an area of approximately 15 m x 15 m.
+
+```{r, fig.height=4, fig.width=10}
+library(gstat)
+library(sp)
+
+data(meuse)
+coordinates(meuse)=~x+y
+
+# empirical variogram
+v.emp <- variogram(zinc ~ 1, meuse)
+
+# fit spherical model
+v.fit <- fit.variogram(v.emp, model = vgm("Sph"))
+
+# Multivariate spatial structure
+v.emp2 <- variogram(zinc ~ elev, meuse)
+v.fit2 <- fit.variogram(v.emp2, model = vgm("Sph"))
+
+
+library(gridExtra)
+library(gridGraphics)
+
+g1 <- plot(v.emp, v.fit, main = "Simple spherical model (zinc ~ 1)")
+g2 <- plot(v.emp2, v.fit2, main = "Multivariate spherical model (zinc ~ elev)")
+
+grid.arrange(g1, g2, ncol = 2)
+```
+
+
+
+```{r, fig.height=4, fig.width=10}
+library(gstat)
+library(sp)
+
+# empirical variogram
+v.emp <- variogram(zinc ~ 1, meuse)
+
+# fit spherical model
+v.fit3 <- fit.variogram(v.emp, model = vgm("Exp"))
+
+# Multivariate spatial structure
+v.emp3 <- variogram(zinc ~ elev, meuse)
+v.fit4 <- fit.variogram(v.emp3, model = vgm("Exp"))
+
+
+library(gridExtra)
+library(gridGraphics)
+
+g3 <- plot(v.emp, v.fit3, main = "Simple exponential model (zinc ~ 1)")
+g4 <- plot(v.emp3, v.fit4, main = "Multivariate exponential model (zinc ~ elev)")
+
+grid.arrange(g3, g4, ncol = 2)
+```
+
+
+# 4. Consequences of Autocorrelation
+
+Although the OLS estimator remains unbiased under the assumption that \(E(\epsilon \mid X)=0\), its variance formula is no longer valid when errors are correlated.
+
+Instead of assuming 
+
+$$ Var(\epsilon)=\sigma^2I$$, we have
+
+$$
+Var(\epsilon)=\Sigma,
+$$
+
+where \(\Sigma\) contains the autocovariances between observations. Consequently, the variance of the OLS estimator becomes
+
+$$
+Var(\hat{\beta}_{OLS})=(X'X)^{-1}X'\Sigma X(X'X)^{-1},
+$$
+
+rather than the classical OLS result
+
+$$
+Var(\hat{\beta}_{OLS})=\sigma^2(X'X)^{-1}.
+$$
+
+As a result:
+
+-  Standard errors are incorrect (often underestimated when autocorrelation is positive).
+-  Hypothesis tests and confidence intervals become unreliable.
+-  Type I error rates may be inflated.
+-  OLS is no longer the most efficient linear unbiased estimator (it is no longer BLUE).
+
+
+# 5. Generalized Additive Models (GAM)
+## 5.1 Motivation
+
+Environmental relationships are often non-linear:
+
+-  temperature effects
+-  seasonal cycles
+-  hydrological responses
+
+GAM allows flexible functional forms:
+
+$$y=f_1(x_1)+f_2(x_2)+...+\epsilon$$
+where $f_i$ are smooth functions (splines).
+
+## 5.2 GAM intuition
+
+A GAM:
+
+-  builds basis functions (splines)
+-  fits them within a regression framework
+-  behaves like a generalized linear model in which linear predictors are replaced by smooth functions.
+
+
+**Fit a GAM**
+
+Instead of a straight line: $Nile = \beta_0 + \beta_1time + \epsilon$, we estimate 
+$$Nile = \beta_0 + f(time) + \epsilon, \quad \epsilon \sim N(0,\sigma^2I)$$ 
+where $f(.)$ is a smooth curve.
+
+```{r }
+library(mgcv)
+
+gam_model <- gam(Nile ~ s(time))
+
+summary(gam_model)
+plot(gam_model)
+
+```
+
+The most important part of the result table is the smooth term ($s(time)$). An EDF close to 1 indicates an approximately linear relationship, while larger EDF values indicate increasing flexibility of the smooth function (nonlinearity). In this example, an EDF of 7.39 suggests a relatively complex nonlinear trend.
+
+In mgcv, smoothness is controlled by a penalty on wiggliness, balancing fit and overfitting.
+
+So we can conclude that the relationship between time and Nile level is strongly nonlinear, requiring about 7 degrees of freedom worth of curvature to capture its shape.
+
+
+**GAM residual diagnostics**
+
+```{r, fig.height=4, fig.width=6}
+
+acf(residuals(gam_model),
+    main = "Residual ACF (GAM)")
+```
+
+The GAM reduces structured residual autocorrelation by capturing nonlinear trends in the mean structure, although it does not explicitly model the error covariance structure. The deviance explained is also higher compared to linear model fit.
+
+## 5.3 Why GAM helps
+
+-  Captures non-linear trends
+-  Reduces structured residual autocorrelation
+-  Improves model fit without overfitting (if smoothed properly)
+
+
+
+# 6. Generalized Least Squares (GLS)
+## 6.1 Problem with Ordinary Least Squares (OLS)
+
+*  OLS assumes that the error terms have constant variance and are uncorrelated:
+
+$$
+Var(\epsilon_i)=\sigma^2, \quad Cov(\epsilon_i, \epsilon_j) = 0 \quad \text{for } i \ne j
+$$
+These assumptions imply that the variance–covariance matrix of the errors is:
+
+$$
+Var(\epsilon) = \sigma^2 I_n,
+$$
+where \(I_n\) is the identity matrix.
+
+Explicitly, this becomes:
+
+$$
+Var(\varepsilon) =
+\begin{bmatrix}
+\sigma^2 & 0 & 0 & \cdots & 0 \\
+0 & \sigma^2 & 0 & \cdots & 0 \\
+0 & 0 & \sigma^2 & \cdots & 0 \\
+\vdots & \vdots & \vdots & \ddots & \vdots \\
+0 & 0 & 0 & \cdots & \sigma^2
+\end{bmatrix}
+$$
+Under these assumptions, the OLS estimator is given by:
+
+$$
+\hat{\beta}_{OLS} = (X'X)^{-1}X'y.
+$$
+* However, when the errors are autocorrelated, the assumption of independence is violated, and the variance–covariance matrix is no longer diagonal. Instead: 
+
+$$ Var(\epsilon) = \Sigma, $$
+where
+$$
+Var(\epsilon) = \Sigma =
+\begin{bmatrix}
+\sigma^2      & \sigma_{12} & \sigma_{13} & \cdots & \sigma_{1n} \\
+\sigma_{21}   & \sigma^2    & \sigma_{23} & \cdots & \sigma_{2n} \\
+\sigma_{31}   & \sigma_{32} & \sigma^2    & \cdots & \sigma_{3n} \\
+\vdots        & \vdots      & \vdots      & \ddots & \vdots \\
+\sigma_{n1}   & \sigma_{n2} & \sigma_{n3} & \cdots & \sigma^2
+\end{bmatrix}
+$$
+the OLS estimator with $\hat{\beta} = \beta + (X'X)^{-1}X'\epsilon$, becomes :
+$$
+Var(\hat{\beta}_{OLS}) = (X'X)^{-1}X'\Sigma X(X'X)^{-1}
+$$
+The off-diagonal elements of $\Sigma$ ($\sigma_{ij}$) are the autocovariances between the $i^{th}$ and the $j^{th}$ observation from which the corresponding autocorrelation is obtained by standardization. Autocorrelation is simply the standardized autocovariance:
+$$
+\rho_{ij} = \frac{\sigma_{ij}}{\sqrt{\sigma_{ii}\sigma_{jj}}}
+$$
+If the process is homoskedastic (\(\sigma_{ii}=\sigma^2\)):
+
+$$
+\rho_{ij} = \frac{\sigma_{ij}}{\sigma^2}
+$$
+Thus, autocorrelation changes only the covariance structure of the errors, not the regression model itself. Generalized Least Squares (GLS) accounts for this non-diagonal covariance matrix when estimating the regression coefficients.
+
+## 6.2 GLS solution
+
+GLS extends ordinary least squares by incorporating the covariance structure of the errors into the estimation procedure:
+
+$$y = X\beta+\epsilon, \quad \epsilon \sim N(0,\Sigma)$$
+The estimator becomes:
+$$
+\hat{\beta}_{GLS} = (X'\Sigma^{-1}X)^{-1}X'\Sigma^{-1}y
+$$ 
+
+GLS therefore accounts for dependence among observations through the inverse covariance matrix \(\Sigma^{-1}\), and can equivalently be viewed as OLS applied after transforming the model so that the errors are uncorrelated.
+
+## 6.3 AR(1) structure
+
+For time series:
+$$
+\Sigma_{ij} = \sigma^2 \rho^{|i-j|}
+$$
+where $|i-j|$ is the temporal distance (lag) between observations. This structure implies that correlation decays exponentially with increasing lag, which defines the AR(1) covariance model.
+
+```{r}
+library(nlme)
+
+gls_model <- gls(Nile ~ time,
+                 correlation = corAR1(form = ~ time))
+
+summary(gls_model)
+```
+
+
+
+**GLS residual diagnostics**
+
+```{r, fig.height=4, fig.width=6}
+
+acf(residuals(gls_model, type = "normalized"),
+    main = "Residual ACF (GLS AR1)")
+```
+
+## 6.5 Effects of GLS
+
+Compared to OLS:
+
+-  Larger standard errors
+-  Higher p-values
+-  Coefficient estimates may differ because GLS accounts for correlation among observations by reweighting them according to the covariance structure.
+-  More realistic inference
+
+# 7. GAM vs GLS
+
+| Aspect                  | GAM                             | GLS                       |
+| ----------------------- | --------------------------------| --------------------------|
+| Handles non-linearity   | Yes                             | No                        |
+| Handles autocorrelation | Indirectly (via mean correction)| Directly                  |
+| Interpretation          | Mean structure                  | Error structure           |
+| Best use                | Trend discovery                 | Inference under dependence|
+
+
+# 8. Key Takeaways
+
+Environmental data analysis can be understood through three complementary tracks:
+
+# 8.1 Model structure track (error dependence)
+
+OLS → $\Sigma$ → GLS → AR(1)
+
+-  OLS assumes independent errors: \(Var(\epsilon) = \sigma^2 I\)  
+-  $\Sigma$ represents the general covariance structure when independence fails  
+-  GLS incorporates Σ into estimation for efficient inference  
+-  AR(1) is a common parametric model for temporal dependence  
+
+
+# 8.2 Diagnostic track (detecting dependence)
+
+ACF / PACF / variogram
+
+-  ACF: measures correlation across time lags  
+-  PACF: identifies direct lag relationships  
+-  Variogram: measures spatial dependence as a function of distance  
+-  These tools help diagnose whether independence assumptions are violated  
+
+
+## 8.3 Mean structure track (systematic signal)
+
+GAM
+
+-  Models non-linear relationships in the mean structure  
+-  Captures trends, seasonality, and smooth environmental responses  
+-  Helps reduce structured residual patterns before modeling dependence  
+
