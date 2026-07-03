@@ -1,14 +1,19 @@
 # Environmental Statistics
 
 ## Lecture 8: Time Series, GAM and Spatial Regression: VCOV and GLS (incl. AR1)
-Suppose we measure daily river discharge for five years. Yesterday's discharge strongly influences today's discharge. Similarly, annual tree-ring growth depends on the previous year's climate. These observations are therefore not independent, violating one of the key assumptions of ordinary regression and can lead to biased inference. 
+This lecture introduces key concepts in environmental data analysis where observations are not independent in time or space.
 
-This lecture distinguishes between misspecification of the mean structure (handled by GAM) and misspecification of the covariance structure (handled by GLS).
+For example, daily river discharge is often strongly influenced by previous days, and annual tree-ring growth depends on past climatic conditions. Similarly, spatial measurements such as soil contamination exhibit dependence between nearby locations. These dependencies violate the independence assumption of ordinary least squares (OLS) regression and can lead to misleading inference if ignored.
 
-In this lecture we cover:
+This lecture distinguishes between two important sources of model misspecification:
 
--   Autocorrelation in time and space
--   Diagnostics: ACF, PACF, correlogram, variogram
--   Generalized Additive Models (GAMs) for non-linear trends
--   Generalized Least Squares (GLS) with AR(1) correlation structure
--   Consequences for inference and model interpretation
+- **Mean structure misspecification**, where the functional form of the relationship is incorrect (addressed using Generalized Additive Models, GAMs)
+- **Covariance structure misspecification**, where residuals are correlated (addressed using Generalized Least Squares, GLS)
+
+### Topics covered
+
+- Autocorrelation in time and space  
+- Diagnostic tools: ACF, PACF, correlograms, and variograms  
+- Generalized Additive Models (GAMs) for flexible, non-linear trends  
+- Generalized Least Squares (GLS) with AR(1) correlation structures  
+- Implications for statistical inference and model interpretation  
